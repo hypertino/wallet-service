@@ -65,7 +65,7 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
     }
   }
 
-  protected def updateOrCreateWallet(amount: BigDecimal, transaction: WalletTransaction)
+  protected def updateOrCreateWallet(amount: Long, transaction: WalletTransaction)
                                     (implicit mcx: MessagingContext): Task[Response[Wallet]] = {
     selectWallet(transaction.walletId).flatMap { walletOption ⇒
       walletOption
@@ -82,9 +82,9 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
     }
   }
 
-  protected def updateWallet(walletWithRevision: WalletWithRevision, amount: BigDecimal, transaction: WalletTransaction)
+  protected def updateWallet(walletWithRevision: WalletWithRevision, amount: Long, transaction: WalletTransaction)
                             (implicit mcx: MessagingContext): Task[Response[Wallet]] = {
-    val newAmount = (BigDecimal(walletWithRevision.wallet.amount, mc) + amount).toString()
+    val newAmount = walletWithRevision.wallet.amount + amount
     val newWallet = walletWithRevision.wallet.copy(
       amount=newAmount,
       lastTransactionId=transaction.transactionId
@@ -186,7 +186,7 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
 //
 //  }
 
-  protected def validateTransaction(implicit request: WalletTransactionPut): Task[BigDecimal] = {
+  protected def validateTransaction(implicit request: WalletTransactionPut): Task[Long] = {
     val i = "invalid-transaction-parameter"
     val t = request.body
     if (Option(t.walletId).forall(_.isEmpty) || t.walletId != request.walletId) {
@@ -198,15 +198,7 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
     if (!Option(t.status).contains(WalletTransactionStatus.NEW)) {
       br(i, s"status should be skipped or 'new', provided: ${t.status}")
     } else {
-      Task
-        .fromTry {
-          Try {
-            BigDecimal(t.amount)
-          }.recoverWith {
-            case NonFatal(_) ⇒
-              Failure(BadRequest(ErrorBody(i, Some(s"amount isn't number: ${t.amount}"))))
-          }
-        }
+      Task.now(t.amount)
     }
   }
 
