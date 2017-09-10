@@ -13,7 +13,7 @@ import com.hypertino.wallet.api._
 import monix.eval.Task
 import monix.execution.Scheduler
 import monix.execution.atomic.AtomicInt
-import org.slf4j.LoggerFactory
+import com.typesafe.scalalogging.StrictLogging
 import scaldi.{Injectable, Injector}
 
 import scala.concurrent.Future
@@ -21,17 +21,16 @@ import scala.concurrent.duration.FiniteDuration
 import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
 
-class WalletService(implicit val injector: Injector) extends Service with Injectable with Subscribable {
-  protected val log = LoggerFactory.getLogger(getClass)
+class WalletService(implicit val injector: Injector) extends Service with Injectable with Subscribable with StrictLogging {
   protected implicit val scheduler = inject[Scheduler]
   protected val hyperbus = inject[Hyperbus]
-  protected val handlers = hyperbus.subscribe(this, log)
+  protected val handlers = hyperbus.subscribe(this, logger)
   protected final val mc = MathContext.DECIMAL64
 
   protected implicit val so = SerializationOptions.default
   import so._
 
-  log.info("WalletService started")
+  logger.info(s"${getClass.getName} started")
 
   def onWalletGet(implicit request: WalletGet): Task[Ok[Wallet]] = {
     hyperbus
@@ -214,7 +213,7 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
 
   override def stopService(controlBreak: Boolean, timeout: FiniteDuration): Future[Unit] = Future {
     handlers.foreach(_.cancel())
-    log.info("WalletService stopped")
+    logger.info(s"${getClass.getName} stopped")
   }
 }
 
