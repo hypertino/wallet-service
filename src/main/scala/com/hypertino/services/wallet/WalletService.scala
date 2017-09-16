@@ -4,11 +4,11 @@ import java.math.MathContext
 
 import com.hypertino.binders.value._
 import com.hypertino.hyperbus.Hyperbus
-import com.hypertino.hyperbus.model.{BadRequest, Created, DynamicBody, ErrorBody, GatewayTimeout, Header, HeadersMap, MessagingContext, NotFound, Ok, PreconditionFailed, Response}
+import com.hypertino.hyperbus.model.{BadRequest, Created, DynamicBody, ErrorBody, GatewayTimeout, Header, Headers, MessagingContext, NotFound, Ok, PreconditionFailed, Response}
 import com.hypertino.hyperbus.serialization.SerializationOptions
 import com.hypertino.hyperbus.subscribe.Subscribable
 import com.hypertino.service.control.api.Service
-import com.hypertino.user.apiref.hyperstorage.{ContentGet, ContentPatch, ContentPut}
+import com.hypertino.user.apiref.hyperstorage.{ContentGet, ContentPatch, ContentPut, HyperStorageHeader}
 import com.hypertino.wallet.api._
 import monix.eval.Task
 import monix.execution.Scheduler
@@ -37,8 +37,12 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
       .ask(ContentGet(hyperStorageWalletPath(request.walletId)))
       .map {
         case ok@Ok(_: DynamicBody, _) ⇒
-          val revision = ok.headers(Header.REVISION)
-          Ok(ok.body.content.to[Wallet], $headersMap=HeadersMap(Header.REVISION → revision))
+          val headers = Headers(
+            ok.headers.filterKeys(key ⇒
+              key.compareToIgnoreCase(Header.REVISION) == 0
+              || key.compareToIgnoreCase(HyperStorageHeader.ETAG) == 0).toSeq :_*
+          )
+          Ok(ok.body.content.to[Wallet], headers=headers)
       }
   }
 
@@ -81,17 +85,17 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
     }
   }
 
-  protected def updateWallet(walletWithRevision: WalletWithRevision, amount: Long, transaction: WalletTransaction)
+  protected def updateWallet(walletWithETag: WalletWithETag, amount: Long, transaction: WalletTransaction)
                             (implicit mcx: MessagingContext): Task[Response[Wallet]] = {
-    val newAmount = walletWithRevision.wallet.amount + amount
-    val newWallet = walletWithRevision.wallet.copy(
+    val newAmount = walletWithETag.wallet.amount + amount
+    val newWallet = walletWithETag.wallet.copy(
       amount=newAmount,
       lastTransactionId=transaction.transactionId
     )
 
     val r = ContentPatch(hyperStorageWalletPath(transaction.walletId), DynamicBody(
       Obj.from("last_transaction_id" → transaction.transactionId, "amount" → newAmount)
-    ), $headersMap=HeadersMap("If-Match" →  Text("\""+ walletWithRevision.revision.toString + "\"")))
+    ), headers=Headers(HyperStorageHeader.IF_MATCH →  walletWithETag.eTag))
 
     hyperbus
       .ask(r)
@@ -110,7 +114,7 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
 
     val r = ContentPut(hyperStorageWalletPath(transaction.walletId), DynamicBody(
       newWallet.toValue
-    ), $headersMap=HeadersMap("If-Match" → "\"\""))
+    ), headers=Headers(HyperStorageHeader.IF_NONE_MATCH → "*"))
 
     hyperbus
       .ask(r)
@@ -120,11 +124,11 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
   }
 
   protected def selectWallet(walletId: String)
-                                    (implicit mcx: MessagingContext): Task[Option[WalletWithRevision]] = {
+                                    (implicit mcx: MessagingContext): Task[Option[WalletWithETag]] = {
     onWalletGet(WalletGet(walletId))
       .materialize
       .flatMap {
-        case Success(ok @ Ok(w, _)) ⇒ Task.now(Some(WalletWithRevision(w, ok.headers(Header.REVISION).toLong)))
+        case Success(ok @ Ok(w, _)) ⇒ Task.now(Some(WalletWithETag(w, ok.headers(HyperStorageHeader.ETAG).toString)))
         case Failure(NotFound(_, _)) ⇒ Task.now(None)
         case Failure(e) ⇒ Task.raiseError(e)
       }
@@ -170,7 +174,6 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
       .materialize
       .flatMap {
         case Success(ok@Ok(_: DynamicBody, _)) ⇒
-          val revision = ok.headers(Header.REVISION)
           Task.now(Some(ok.body.content.to[WalletTransaction]))
 
         case Failure(nf : NotFound[_]) ⇒
@@ -180,10 +183,6 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
           Task.raiseError(o)
       }
   }
-//
-//  protected def createWallet(walletId: String): Task[Wallet] = {
-//
-//  }
 
   protected def validateTransaction(implicit request: WalletTransactionPut): Task[Long] = {
     val i = "invalid-transaction-parameter"
@@ -217,4 +216,4 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
   }
 }
 
-private [wallet] case class WalletWithRevision(wallet: Wallet, revision: Long)
+private [wallet] case class WalletWithETag(wallet: Wallet, eTag: String)

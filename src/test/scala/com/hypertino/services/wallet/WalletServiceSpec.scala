@@ -1,11 +1,11 @@
 package com.hypertino.services.wallet
 
-import com.hypertino.binders.value.{Null, Obj, Value}
+import com.hypertino.binders.value.{Null, Obj, Text, Value}
 import com.hypertino.hyperbus.Hyperbus
-import com.hypertino.hyperbus.model.{BadRequest, Created, DynamicBody, EmptyBody, ErrorBody, Header, HeadersMap, MessagingContext, NotFound, Ok, PreconditionFailed, RequestBase, ResponseBase}
+import com.hypertino.hyperbus.model.{BadRequest, Created, DynamicBody, EmptyBody, ErrorBody, Headers, MessagingContext, NotFound, Ok, PreconditionFailed, RequestBase, ResponseBase}
 import com.hypertino.hyperbus.subscribe.Subscribable
 import com.hypertino.service.config.ConfigLoader
-import com.hypertino.user.apiref.hyperstorage.{ContentDelete, ContentGet, ContentPatch, ContentPut}
+import com.hypertino.user.apiref.hyperstorage._
 import com.hypertino.wallet.api.{Wallet, WalletTransaction, WalletTransactionPut, WalletTransactionStatus}
 import com.typesafe.config.Config
 import monix.eval.Task
@@ -73,7 +73,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
   def onContentGet(implicit request: ContentGet): Task[ResponseBase] = {
     hbpc(request).map { _ ⇒
       hyperStorageContent.get(request.path) match {
-        case Some(v) ⇒ Ok(DynamicBody(v._1), $headersMap = HeadersMap(Header.REVISION → v._2))
+        case Some(v) ⇒ Ok(DynamicBody(v._1), headers = Headers(HyperStorageHeader.ETAG → Text("\"" + v._2 + "\"")))
         case None ⇒ NotFound(ErrorBody("not-found", Some(request.path)))
       }
     }
@@ -81,35 +81,54 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
 
   private def hbpc(request: RequestBase): Task[Long] = {
     val path = request.headers.hrl.query.path.toString
-    request.headers.get("if-match").map { rev ⇒ {
-      failPreconditions.get(path).map { fp ⇒
-        if (fp._2.incrementAndGet() <= fp._1) {
-          Task.raiseError(PreconditionFailed(ErrorBody("fake")))
-        }
-        else {
-          Task.unit
-        }
-      }.getOrElse {
-        Task.unit
-      }
-    }.flatMap { _ ⇒
-      val (existingRev, etag) = hyperStorageContent.get(path).map { case (_, v) ⇒
-        val q = '"'
-        (v, s"$q$v$q")
-      }.getOrElse {
-        (0l, "\"\"")
-      }
+    val existingRev = hyperStorageContent.get(path).map { case (_, v) ⇒
+      v
+    }.getOrElse {
+      0l
+    }
+    val existingTag = "\"" + existingRev + "\""
 
-      if (etag != rev.toString) {
-        Task.raiseError(PreconditionFailed(ErrorBody("revision")))
-      } else {
-        Task.now(existingRev)
+    {
+      request.headers.get("if-match").map { etag ⇒ {
+        checkFailPreconditions(path)
+      }.flatMap { _ ⇒
+        if ((existingTag != etag.toString) && (!(etag.toString == "*" && existingRev != 0))) {
+          Task.raiseError(PreconditionFailed(ErrorBody("revision")))
+        } else {
+          Task.now(existingRev)
+        }
       }
-    }} getOrElse {
-      Task.now(0l)
+      } getOrElse {
+        Task.now(0l)
+      }
+    }.flatMap { r ⇒
+      request.headers.get("if-none-match").map { etag ⇒ {
+        checkFailPreconditions(path)
+      }.flatMap { _ ⇒
+        if ((existingTag == etag.toString) || (etag.toString == "*" && existingRev != 0)) {
+          Task.raiseError(PreconditionFailed(ErrorBody("revision")))
+        } else {
+          Task.now(existingRev)
+        }
+      }
+      } getOrElse {
+        Task.now(r)
+      }
     }
   }
 
+  private def checkFailPreconditions(path: String): Task[Unit] = {
+    failPreconditions.get(path).map { fp ⇒
+      if (fp._2.incrementAndGet() <= fp._1) {
+        Task.raiseError(PreconditionFailed(ErrorBody("fake")))
+      }
+      else {
+        Task.unit
+      }
+    }.getOrElse {
+      Task.unit
+    }
+  }
 
   "WalletService" should "create new wallet + transaction" in {
     val u = hyperbus
@@ -183,7 +202,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "wallet_id" → "w1",
       "amount" → 10,
       "status" → "new"
-    ),1))
+    ),1l))
 
     val u2 = hyperbus
       .ask(WalletTransactionPut("w1", "t2", WalletTransaction("t2", "w1", -3l, WalletTransactionStatus.NEW, Null)))
