@@ -4,6 +4,8 @@ import com.hypertino.binders.value.{Null, Obj, Text, Value}
 import com.hypertino.hyperbus.Hyperbus
 import com.hypertino.hyperbus.model.{BadRequest, Created, DynamicBody, EmptyBody, ErrorBody, Headers, MessagingContext, NotFound, Ok, PreconditionFailed, RequestBase, ResponseBase}
 import com.hypertino.hyperbus.subscribe.Subscribable
+import com.hypertino.hyperbus.transport.api.ServiceRegistrator
+import com.hypertino.hyperbus.transport.registrators.DummyRegistrator
 import com.hypertino.service.config.ConfigLoader
 import com.hypertino.user.apiref.hyperstorage._
 import com.hypertino.wallet.api.{Wallet, WalletTransaction, WalletTransactionPut, WalletTransactionStatus}
@@ -24,8 +26,9 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
   private implicit val scheduler = monix.execution.Scheduler.Implicits.global
   private implicit val mcx = MessagingContext.empty
   bind [Config] to ConfigLoader()
-  bind [Scheduler] identifiedBy 'scheduler to scheduler
-  bind [Hyperbus] identifiedBy 'hyperbus to injected[Hyperbus]
+  bind [Scheduler] to scheduler
+  bind [Hyperbus] to injected[Hyperbus]
+  bind [ServiceRegistrator] to DummyRegistrator
 
   private val hyperbus = inject[Hyperbus]
   private val handlers = hyperbus.subscribe(this)
@@ -80,7 +83,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
   }
 
   private def hbpc(request: RequestBase): Task[Long] = {
-    val path = request.headers.hrl.query.path.toString
+    val path = request.headers.hrl.query.dynamic.path.toString
     val existingRev = hyperStorageContent.get(path).map { case (_, v) ⇒
       v
     }.getOrElse {
