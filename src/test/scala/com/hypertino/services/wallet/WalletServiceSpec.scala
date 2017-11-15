@@ -57,7 +57,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
           Ok(EmptyBody)
 
         case None ⇒
-          NotFound()
+          NotFound(ErrorBody("not-found"))
       }
     }
   }
@@ -68,7 +68,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
         Ok(EmptyBody)
       }
       else {
-        NotFound()
+        NotFound(ErrorBody("not-found"))
       }
     }
   }
@@ -77,7 +77,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
     hbpc(request).map { _ ⇒
       hyperStorageContent.get(request.path) match {
         case Some(v) ⇒ Ok(DynamicBody(v._1), headers = Headers(HyperStorageHeader.ETAG → Text("\"" + v._2 + "\"")))
-        case None ⇒ NotFound()
+        case None ⇒ NotFound(ErrorBody("not-found", Some(request.path)))
       }
     }
   }

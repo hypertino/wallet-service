@@ -61,7 +61,7 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
               saveTransactionStatus(request.body, WalletTransactionStatus.APPLIED).map { _ ⇒
                 r
               }
-            case Failure(_: PreconditionFailed[_]) ⇒ Task.raiseError(GatewayTimeout(ErrorBody("wallet_update_failed", Some(s"Wallet update(s) conflit limit is reached ($LIMIT)"))))
+            case Failure(_: PreconditionFailed[_]) ⇒ Task.raiseError(GatewayTimeout(ErrorBody("wallet-update-failed", Some(s"Wallet update(s) conflit limit is reached ($LIMIT)"))))
             case Failure(e) ⇒ Task.raiseError(e)
           }
       }
