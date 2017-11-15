@@ -4,22 +4,23 @@ import java.math.MathContext
 
 import com.hypertino.binders.value._
 import com.hypertino.hyperbus.Hyperbus
-import com.hypertino.hyperbus.model.{BadRequest, Created, DynamicBody, ErrorBody, GatewayTimeout, Header, Headers, MessagingContext, NotFound, Ok, PreconditionFailed, Response}
+import com.hypertino.hyperbus.model.{BadRequest, Conflict, Created, DynamicBody, ErrorBody, GatewayTimeout, Header, Headers, MessagingContext, NotFound, Ok, PreconditionFailed, Response}
 import com.hypertino.hyperbus.serialization.SerializationOptions
 import com.hypertino.hyperbus.subscribe.Subscribable
+import com.hypertino.hyperbus.util.ErrorUtils
 import com.hypertino.service.control.api.Service
+import com.hypertino.services.wallet.utils.ErrorCode
 import com.hypertino.user.apiref.hyperstorage.{ContentGet, ContentPatch, ContentPut, HyperStorageHeader}
 import com.hypertino.wallet.api._
+import com.typesafe.scalalogging.StrictLogging
 import monix.eval.Task
 import monix.execution.Scheduler
 import monix.execution.atomic.AtomicInt
-import com.typesafe.scalalogging.StrictLogging
 import scaldi.{Injectable, Injector}
 
 import scala.concurrent.Future
 import scala.concurrent.duration.FiniteDuration
-import scala.util.control.NonFatal
-import scala.util.{Failure, Success, Try}
+import scala.util.{Failure, Success}
 
 class WalletService(implicit val injector: Injector) extends Service with Injectable with Subscribable with StrictLogging {
   protected implicit val scheduler = inject[Scheduler]
@@ -61,7 +62,8 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
               saveTransactionStatus(request.body, WalletTransactionStatus.APPLIED).map { _ ⇒
                 r
               }
-            case Failure(_: PreconditionFailed[_]) ⇒ Task.raiseError(GatewayTimeout(ErrorBody("wallet_update_failed", Some(s"Wallet update(s) conflit limit is reached ($LIMIT)"))))
+            case Failure(_: PreconditionFailed[_]) ⇒ Task.raiseError(GatewayTimeout(ErrorBody(ErrorCode.WALLET_UPDATE_FAILED,
+              Some(s"Wallet update(s) conflict limit is reached ($LIMIT)"))))
             case Failure(e) ⇒ Task.raiseError(e)
           }
       }
@@ -90,18 +92,22 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
     val newAmount = walletWithETag.wallet.amount + amount
     val newWallet = walletWithETag.wallet.copy(
       amount=newAmount,
+      minimum=transaction.minimum,
+      maximum=transaction.maximum,
       lastTransactionId=transaction.transactionId
     )
 
-    val r = ContentPatch(hyperStorageWalletPath(transaction.walletId), DynamicBody(
-      Obj.from("last_transaction_id" → transaction.transactionId, "amount" → newAmount)
-    ), headers=Headers(HyperStorageHeader.IF_MATCH →  walletWithETag.eTag))
+    checkBounds(newWallet).flatMap { _ ⇒
+      val r = ContentPatch(hyperStorageWalletPath(transaction.walletId), DynamicBody(
+        Obj.from("last_transaction_id" → transaction.transactionId, "amount" → newAmount)
+      ), headers = Headers(HyperStorageHeader.IF_MATCH → walletWithETag.eTag))
 
-    hyperbus
-      .ask(r)
-      .map { _ ⇒
-        Ok(newWallet)
-      }
+      hyperbus
+        .ask(r)
+        .map { _ ⇒
+          Ok(newWallet)
+        }
+    }
   }
 
   protected def createWallet(transaction: WalletTransaction)
@@ -109,18 +115,32 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
     val newWallet = Wallet(
       walletId=transaction.walletId,
       amount=transaction.amount,
+      minimum=transaction.minimum,
+      maximum=transaction.maximum,
       lastTransactionId=transaction.transactionId
     )
 
-    val r = ContentPut(hyperStorageWalletPath(transaction.walletId), DynamicBody(
-      newWallet.toValue
-    ), headers=Headers(HyperStorageHeader.IF_NONE_MATCH → "*"))
+    checkBounds(newWallet).flatMap { _ ⇒
+      val r = ContentPut(hyperStorageWalletPath(transaction.walletId), DynamicBody(
+        newWallet.toValue
+      ), headers = Headers(HyperStorageHeader.IF_NONE_MATCH → "*"))
 
-    hyperbus
-      .ask(r)
-      .map { _ ⇒
-        Created(newWallet)
-      }
+      hyperbus
+        .ask(r)
+        .map { _ ⇒
+          Created(newWallet)
+        }
+    }
+  }
+
+  private def checkBounds(wallet: Wallet)(implicit mc: MessagingContext): Task[Wallet] = {
+    if (wallet.minimum.exists(wallet.amount < _))
+      Task.raiseError(Conflict(ErrorBody(ErrorCode.WALLET_MINIMUM_EXCEEDED, Some(s"${wallet.amount} is less than allowed ${wallet.minimum.get}"))))
+    else
+    if (wallet.maximum.exists(wallet.amount > _))
+      Task.raiseError(Conflict(ErrorBody(ErrorCode.WALLET_MAXIMUM_EXCEEDED, Some(s"${wallet.amount} is greater than allowed ${wallet.maximum.get}"))))
+    else
+      Task.now(wallet)
   }
 
   protected def selectWallet(walletId: String)
@@ -181,6 +201,9 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
 
         case Failure(o) ⇒
           Task.raiseError(o)
+
+        case o ⇒
+          ErrorUtils.unexpectedTask(o)
       }
   }
 

@@ -2,7 +2,7 @@ package com.hypertino.services.wallet
 
 import com.hypertino.binders.value.{Null, Obj, Text, Value}
 import com.hypertino.hyperbus.Hyperbus
-import com.hypertino.hyperbus.model.{BadRequest, Created, DynamicBody, EmptyBody, ErrorBody, Headers, MessagingContext, NotFound, Ok, PreconditionFailed, RequestBase, ResponseBase}
+import com.hypertino.hyperbus.model.{BadRequest, Conflict, Created, DynamicBody, EmptyBody, ErrorBody, Headers, MessagingContext, NotFound, Ok, PreconditionFailed, RequestBase, ResponseBase}
 import com.hypertino.hyperbus.subscribe.Subscribable
 import com.hypertino.hyperbus.transport.api.ServiceRegistrator
 import com.hypertino.hyperbus.transport.registrators.DummyRegistrator
@@ -135,7 +135,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
 
   "WalletService" should "create new wallet + transaction" in {
     val u = hyperbus
-      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .futureValue
     u shouldBe a[Created[_]]
@@ -157,14 +157,14 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
 
   it should "update wallet with second transaction" in {
     val u = hyperbus
-      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .futureValue
     u shouldBe a[Created[_]]
     u.body shouldBe a[Wallet]
 
     val u2 = hyperbus
-      .ask(WalletTransactionPut("w1", "t2", WalletTransaction("t2", "w1", -3l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t2", WalletTransaction("t2", "w1", -3l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .futureValue
     u2 shouldBe a[Ok[_]]
@@ -187,7 +187,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
 
   it should "complete last transaction" in {
     val u = hyperbus
-      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .futureValue
     u shouldBe a[Created[_]]
@@ -208,7 +208,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
     ),1l))
 
     val u2 = hyperbus
-      .ask(WalletTransactionPut("w1", "t2", WalletTransaction("t2", "w1", -3l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t2", WalletTransaction("t2", "w1", -3l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .futureValue
     u2 shouldBe a[Ok[_]]
@@ -238,7 +238,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
 
   it should "retry transaction if precondition failed" in {
     val u = hyperbus
-      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .futureValue
     u shouldBe a[Created[_]]
@@ -247,7 +247,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
     failPreconditions.put("wallet-service/wallets/w1", (2, AtomicInt(0)))
 
     val u2 = hyperbus
-      .ask(WalletTransactionPut("w1", "t2", WalletTransaction("t2", "w1", -3l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t2", WalletTransaction("t2", "w1", -3l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .futureValue
     u2 shouldBe a[Ok[_]]
@@ -272,22 +272,36 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
 
   it should "validate transaction fields" in {
     hyperbus
-      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("", "w1", 10l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("", "w1", 10l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .failed
       .futureValue shouldBe a[BadRequest[_]]
 
     hyperbus
-      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t2", "w1", 10l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t2", "w1", 10l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .failed
       .futureValue shouldBe a[BadRequest[_]]
 
     hyperbus
-      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w2", 10l, WalletTransactionStatus.NEW, Null)))
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w2", 10l, None, None, WalletTransactionStatus.NEW, Null)))
       .runAsync
       .failed
       .futureValue shouldBe a[BadRequest[_]]
+  }
+
+  it should "validate wallet bounds" in {
+    hyperbus
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", -1, Some(0), None, WalletTransactionStatus.NEW, Null)))
+      .runAsync
+      .failed
+      .futureValue shouldBe a[Conflict[_]]
+
+    hyperbus
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10, None, Some(9), WalletTransactionStatus.NEW, Null)))
+      .runAsync
+      .failed
+      .futureValue shouldBe a[Conflict[_]]
   }
 
   override def afterAll() {
