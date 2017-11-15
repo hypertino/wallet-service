@@ -49,23 +49,33 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
 
   def onWalletTransactionPut(implicit request: WalletTransactionPut): Task[Response[Wallet]] = {
     validateTransaction(request).flatMap { amount ⇒
-      saveTransaction(request.body).flatMap { _ ⇒
-        val LIMIT = 5
-        val counter = AtomicInt(LIMIT) // do maximum 5 retries on conflict
-        updateOrCreateWallet(amount, request.body)
-          .onErrorRestartIf { e ⇒
-            e.isInstanceOf[PreconditionFailed[_]] && counter.decrementAndGet() > 0
-          }
-          .materialize
-          .flatMap {
-            case Success(r) ⇒
-              saveTransactionStatus(request.body, WalletTransactionStatus.APPLIED).map { _ ⇒
-                r
+      saveTransaction(request.body).flatMap { alreadySaved ⇒
+        if (alreadySaved) {
+          onWalletGet(WalletGet(request.walletId))
+        }
+        else {
+          val LIMIT = 5
+          val counter = AtomicInt(LIMIT) // do maximum 5 retries on conflict
+          updateOrCreateWallet(amount, request.body)
+            .onErrorRestartIf { e ⇒
+              e.isInstanceOf[PreconditionFailed[_]] && counter.decrementAndGet() > 0
+            }
+            .materialize
+            .flatMap {
+              case Success(r) ⇒
+                saveTransactionStatus(request.body, WalletTransactionStatus.APPLIED).map { _ ⇒
+                  r
+                }
+              case Failure(_: PreconditionFailed[_]) ⇒ Task.raiseError(GatewayTimeout(ErrorBody(ErrorCode.WALLET_UPDATE_FAILED,
+                Some(s"Wallet update(s) conflict limit is reached ($LIMIT)"))))
+
+              case Failure(e: Conflict[_]) ⇒ saveTransactionStatus(request.body, WalletTransactionStatus.FAILED).flatMap { _ ⇒
+                Task.raiseError(e)
               }
-            case Failure(_: PreconditionFailed[_]) ⇒ Task.raiseError(GatewayTimeout(ErrorBody(ErrorCode.WALLET_UPDATE_FAILED,
-              Some(s"Wallet update(s) conflict limit is reached ($LIMIT)"))))
-            case Failure(e) ⇒ Task.raiseError(e)
-          }
+
+              case o ⇒ ErrorUtils.unexpectedTask(o)
+            }
+        }
       }
     }
   }
@@ -150,14 +160,14 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
       .flatMap {
         case Success(ok @ Ok(w, _)) ⇒ Task.now(Some(WalletWithETag(w, ok.headers(HyperStorageHeader.ETAG).toString)))
         case Failure(NotFound(_, _)) ⇒ Task.now(None)
-        case Failure(e) ⇒ Task.raiseError(e)
+        case other ⇒ ErrorUtils.unexpectedTask(other)
       }
   }
 
   protected def applyLastTransaction(wallet: Wallet)
                                     (implicit mcx: MessagingContext): Task[Unit] = {
 
-    getTransaction(wallet.walletId, wallet.lastTransactionId).flatMap {
+    selectTransaction(wallet.walletId, wallet.lastTransactionId).flatMap {
       case Some(transaction) ⇒
         if (transaction.status == WalletTransactionStatus.NEW)
           saveTransactionStatus(transaction, WalletTransactionStatus.APPLIED)
@@ -169,13 +179,24 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
     }
   }
 
+  // returns true if the transaction is already saved, no need to update wallet amount
   protected def saveTransaction(transaction: WalletTransaction)
-                               (implicit mcx: MessagingContext): Task[Unit] = {
+                               (implicit mcx: MessagingContext): Task[Boolean] = {
     hyperbus
-      .ask(ContentPut(hyperStorageWalletTransactionPath(transaction.walletId, transaction.transactionId), DynamicBody(
+      .ask(
+        ContentPut(hyperStorageWalletTransactionPath(transaction.walletId, transaction.transactionId), DynamicBody(
         transaction.toValue
-      )))
-      .map { _ ⇒ }
+        ), headers = Headers(HyperStorageHeader.IF_NONE_MATCH → "*"))
+      )
+      .materialize
+      .flatMap {
+        case Success(_) ⇒
+          Task.now(false)
+        case Failure(_: PreconditionFailed[_]) ⇒
+          validateExistingTransaction(transaction)
+        case o ⇒
+          ErrorUtils.unexpectedTask(o)
+      }
   }
 
   protected def saveTransactionStatus(transaction: WalletTransaction, status: String)
@@ -183,12 +204,12 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
     hyperbus
       .ask(ContentPatch(hyperStorageWalletTransactionPath(transaction.walletId, transaction.transactionId), DynamicBody(
         Obj.from("status" → status)
-      )))
+      ), headers = Headers(HyperStorageHeader.IF_MATCH → "*")))
       .map { _ ⇒ }
   }
 
-  protected def getTransaction(walletId: String, transactionId: String)
-                                       (implicit mcx: MessagingContext): Task[Option[WalletTransaction]] = {
+  protected def selectTransaction(walletId: String, transactionId: String)
+                                 (implicit mcx: MessagingContext): Task[Option[WalletTransaction]] = {
     hyperbus
       .ask(ContentGet(hyperStorageWalletTransactionPath(walletId, transactionId)))
       .materialize
@@ -198,9 +219,6 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
 
         case Failure(nf : NotFound[_]) ⇒
           Task.now(None)
-
-        case Failure(o) ⇒
-          Task.raiseError(o)
 
         case o ⇒
           ErrorUtils.unexpectedTask(o)
@@ -212,15 +230,37 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
     val t = request.body
     if (Option(t.walletId).forall(_.isEmpty) || t.walletId != request.walletId) {
       br(i, s"wallet_id has invalid value: ${t.walletId}")
-    } else
-    if (Option(t.transactionId).forall(_.isEmpty) || t.transactionId != request.transactionId) {
+    } else if (Option(t.transactionId).forall(_.isEmpty) || t.transactionId != request.transactionId) {
       br(i, s"transaction_id has invalid value: ${t.transactionId}")
-    } else
-    if (!Option(t.status).contains(WalletTransactionStatus.NEW)) {
+    } else if (!Option(t.status).contains(WalletTransactionStatus.NEW)) {
       br(i, s"status should be skipped or 'new', provided: ${t.status}")
     } else {
       Task.now(t.amount)
     }
+  }
+
+  protected def validateExistingTransaction(newTr: WalletTransaction)
+                                           (implicit mcx: MessagingContext): Task[Boolean] = {
+    selectTransaction(newTr.walletId, newTr.transactionId)
+      .map { existingTrO ⇒
+        existingTrO.map { e ⇒
+          // if existing become applied it's fine even new still in status NEW
+          val ecmp = if (e.status == WalletTransactionStatus.APPLIED && newTr.status == WalletTransactionStatus.NEW) {
+            e.copy(status = WalletTransactionStatus.NEW)
+          } else {
+            e
+          }
+
+          if (ecmp != newTr) {
+            throw Conflict(ErrorBody(ErrorCode.WALLET_DUPLICATE_TRANSACTION, Some(s"Can't overwrite existing transaction: ${newTr.walletId}/${newTr.transactionId}")))
+          }
+          else {
+            true
+          }
+        } getOrElse {
+          false
+        }
+      }
   }
 
   private def br(s: String, d: String)(implicit mcx: MessagingContext) =

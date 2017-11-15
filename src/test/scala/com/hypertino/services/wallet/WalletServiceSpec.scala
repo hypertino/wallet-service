@@ -34,9 +34,8 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
   private val handlers = hyperbus.subscribe(this)
   Thread.sleep(500)
   private val service = new WalletService()
-  val hyperStorageContent = mutable.Map[String, (Value, Long)]()
-
-  val failPreconditions = mutable.Map[String, (Int, AtomicInt)]()
+  final val hyperStorageContent = mutable.Map[String, (Value, Long)]()
+  final val failPreconditions = mutable.Map[String, (Int, AtomicInt)]()
 
   def onContentPut(implicit request: ContentPut): Task[ResponseBase] = {
     hbpc(request).map { rev ⇒
@@ -152,7 +151,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "wallet_id" → "w1",
       "amount" → 10,
       "status" → "applied"
-    ),1))
+    ),2))
   }
 
   it should "update wallet with second transaction" in {
@@ -182,7 +181,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "wallet_id" → "w1",
       "amount" → -3,
       "status" → "applied"
-    ),1))
+    ),2))
   }
 
   it should "complete last transaction" in {
@@ -198,7 +197,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "wallet_id" → "w1",
       "amount" → 10,
       "status" → "applied"
-    ),1))
+    ),2))
 
     hyperStorageContent.put(s"wallet-service/wallets/w1/transactions~/t1", (Obj.from(
       "transaction_id" → "t1",
@@ -226,14 +225,14 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "wallet_id" → "w1",
       "amount" → 10,
       "status" → "applied"
-    ),1))
+    ),2))
 
     hyperStorageContent.get(s"wallet-service/wallets/w1/transactions~/t2") shouldBe Some((Obj.from(
       "transaction_id" → "t2",
       "wallet_id" → "w1",
       "amount" → -3,
       "status" → "applied"
-    ),1))
+    ),2))
   }
 
   it should "retry transaction if precondition failed" in {
@@ -265,7 +264,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "wallet_id" → "w1",
       "amount" → -3,
       "status" → "applied"
-    ),1))
+    ),2))
 
     failPreconditions("wallet-service/wallets/w1")._2.get shouldBe 3
   }
@@ -302,6 +301,30 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       .runAsync
       .failed
       .futureValue shouldBe a[Conflict[_]]
+  }
+
+  it should "protect from duplicate transaction" in {
+    val u = hyperbus
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, None, None, WalletTransactionStatus.NEW, Null)))
+      .runAsync
+      .futureValue
+    u shouldBe a[Created[_]]
+    u.body shouldBe a[Wallet]
+
+    val u2 = hyperbus
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 10l, None, None, WalletTransactionStatus.NEW, Null)))
+      .runAsync
+      .futureValue
+    u2 shouldBe a[Ok[_]]
+    u2.body shouldBe a[Wallet]
+    u2.body.amount shouldBe 10l
+
+    val u3 = hyperbus
+      .ask(WalletTransactionPut("w1", "t1", WalletTransaction("t1", "w1", 11l, None, None, WalletTransactionStatus.NEW, Null)))
+      .runAsync
+      .failed
+      .futureValue
+    u3 shouldBe a[Conflict[_]]
   }
 
   override def afterAll() {
