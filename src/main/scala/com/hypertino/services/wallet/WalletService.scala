@@ -104,7 +104,8 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
       amount=newAmount,
       minimum=transaction.minimum,
       maximum=transaction.maximum,
-      lastTransactionId=transaction.transactionId
+      lastTransactionId=transaction.transactionId,
+      updatedAt=transaction.createdAt
     )
 
     checkBounds(newWallet).flatMap { _ ⇒
@@ -127,7 +128,8 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
       amount=transaction.amount,
       minimum=transaction.minimum,
       maximum=transaction.maximum,
-      lastTransactionId=transaction.transactionId
+      lastTransactionId=transaction.transactionId,
+      updatedAt=transaction.createdAt
     )
 
     checkBounds(newWallet).flatMap { _ ⇒
