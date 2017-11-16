@@ -44,6 +44,24 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
               || key.compareToIgnoreCase(HyperStorageHeader.ETAG) == 0).toSeq :_*
           )
           Ok(ok.body.content.to[Wallet], headers=headers)
+
+        case o ⇒ ErrorUtils.unexpected(o)
+      }
+  }
+
+  def onWalletTransactionGet(implicit request: WalletTransactionGet): Task[Ok[WalletTransaction]] = {
+    hyperbus
+      .ask(ContentGet(hyperStorageWalletTransactionPath(request.walletId, request.transactionId)))
+      .map {
+        case ok@Ok(_: DynamicBody, _) ⇒
+          val headers = Headers(
+            ok.headers.filterKeys(key ⇒
+              key.compareToIgnoreCase(Header.REVISION) == 0
+                || key.compareToIgnoreCase(HyperStorageHeader.ETAG) == 0).toSeq :_*
+          )
+          Ok(ok.body.content.to[WalletTransaction], headers=headers)
+
+        case o ⇒ ErrorUtils.unexpected(o)
       }
   }
 

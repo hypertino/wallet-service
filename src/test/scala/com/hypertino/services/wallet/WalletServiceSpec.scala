@@ -8,7 +8,7 @@ import com.hypertino.hyperbus.transport.api.ServiceRegistrator
 import com.hypertino.hyperbus.transport.registrators.DummyRegistrator
 import com.hypertino.service.config.ConfigLoader
 import com.hypertino.user.apiref.hyperstorage._
-import com.hypertino.wallet.api.{Wallet, WalletTransaction, WalletTransactionPut, WalletTransactionStatus}
+import com.hypertino.wallet.api._
 import com.typesafe.config.Config
 import monix.eval.Task
 import monix.execution.Scheduler
@@ -156,6 +156,14 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "status" → "applied",
       "created_at" → time
     ),2))
+
+    val t = hyperbus
+      .ask(WalletTransactionGet("w1", "t1"))
+      .runAsync
+      .futureValue
+
+    t shouldBe a[Ok[_]]
+    t.body shouldBe WalletTransaction("t1", "w1", 10l, time, None, None, WalletTransactionStatus.APPLIED, Null)
   }
 
   it should "update wallet with second transaction" in {
