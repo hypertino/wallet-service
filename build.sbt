@@ -16,6 +16,7 @@ lazy val `wallet-service` = project in file(".") enablePlugins Raml2Hyperbus set
       "com.hypertino" %% "service-config" % "0.2.0" % "test",
       "ch.qos.logback" % "logback-classic" % "1.2.3" % "test",
       "org.scalamock" %% "scalamock-scalatest-support" % "3.5.0" % "test",
+      "com.hypertino" %% "hyperstorage" % "0.6-SNAPSHOT" % "test",
       compilerPlugin("org.scalamacros" % "paradise" % "2.1.0" cross CrossVersion.full)
     ),
     ramlHyperbusSources := Seq(

@@ -2,15 +2,14 @@ package com.hypertino.services.wallet
 
 import com.hypertino.binders.value.{Null, Obj, Text, Value}
 import com.hypertino.hyperbus.Hyperbus
-import com.hypertino.hyperbus.model.{BadRequest, Conflict, Created, DynamicBody, EmptyBody, ErrorBody, Headers, MessagingContext, NotFound, Ok, PreconditionFailed, RequestBase, ResponseBase}
+import com.hypertino.hyperbus.model.{BadRequest, Conflict, Created, MessagingContext, Ok}
 import com.hypertino.hyperbus.subscribe.Subscribable
 import com.hypertino.hyperbus.transport.api.ServiceRegistrator
 import com.hypertino.hyperbus.transport.registrators.DummyRegistrator
+import com.hypertino.mock.hyperstorage.HyperStorageMock
 import com.hypertino.service.config.ConfigLoader
-import com.hypertino.user.apiref.hyperstorage._
 import com.hypertino.wallet.api._
 import com.typesafe.config.Config
-import monix.eval.Task
 import monix.execution.Scheduler
 import monix.execution.atomic.AtomicInt
 import org.scalatest.concurrent.ScalaFutures
@@ -18,7 +17,6 @@ import org.scalatest.time.{Seconds, Span}
 import org.scalatest.{BeforeAndAfterAll, BeforeAndAfterEach, FlatSpec, Matchers}
 import scaldi.Module
 
-import scala.collection.mutable
 import scala.concurrent.duration._
 
 class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with BeforeAndAfterEach with ScalaFutures with Matchers with Subscribable {
@@ -31,106 +29,10 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
   bind [ServiceRegistrator] to DummyRegistrator
 
   private val hyperbus = inject[Hyperbus]
-  private val handlers = hyperbus.subscribe(this)
   Thread.sleep(500)
   private val service = new WalletService()
-  final val hyperStorageContent = mutable.Map[String, (Value, Long)]()
-  final val failPreconditions = mutable.Map[String, (Int, AtomicInt)]()
-
-  def onContentPut(implicit request: ContentPut): Task[ResponseBase] = {
-    hbpc(request).map { rev ⇒
-      if (hyperStorageContent.put(request.path, (request.body.content, rev+1)).isDefined) {
-        Ok(EmptyBody)
-      }
-      else {
-        Created(EmptyBody)
-      }
-    }
-  }
-
-  def onContentPatch(implicit request: ContentPatch): Task[ResponseBase] = {
-    hbpc(request).map { rev ⇒
-      hyperStorageContent.get(request.path) match {
-        case Some(v) ⇒
-          hyperStorageContent.put(request.path, (v._1 % request.body.content, rev + 1))
-          Ok(EmptyBody)
-
-        case None ⇒
-          NotFound()
-      }
-    }
-  }
-
-  def onContentDelete(implicit request: ContentDelete): Task[ResponseBase] = {
-    hbpc(request).map { rev ⇒
-      if (hyperStorageContent.remove(request.path).isDefined) {
-        Ok(EmptyBody)
-      }
-      else {
-        NotFound()
-      }
-    }
-  }
-
-  def onContentGet(implicit request: ContentGet): Task[ResponseBase] = {
-    hbpc(request).map { _ ⇒
-      hyperStorageContent.get(request.path) match {
-        case Some(v) ⇒ Ok(DynamicBody(v._1), headers = Headers(HyperStorageHeader.ETAG → Text("\"" + v._2 + "\"")))
-        case None ⇒ NotFound()
-      }
-    }
-  }
-
-  private def hbpc(request: RequestBase): Task[Long] = {
-    val path = request.headers.hrl.query.dynamic.path.toString
-    val existingRev = hyperStorageContent.get(path).map { case (_, v) ⇒
-      v
-    }.getOrElse {
-      0l
-    }
-    val existingTag = "\"" + existingRev + "\""
-
-    {
-      request.headers.get("if-match").map { etag ⇒ {
-        checkFailPreconditions(path)
-      }.flatMap { _ ⇒
-        if ((existingTag != etag.toString) && (!(etag.toString == "*" && existingRev != 0))) {
-          Task.raiseError(PreconditionFailed(ErrorBody("revision")))
-        } else {
-          Task.now(existingRev)
-        }
-      }
-      } getOrElse {
-        Task.now(0l)
-      }
-    }.flatMap { r ⇒
-      request.headers.get("if-none-match").map { etag ⇒ {
-        checkFailPreconditions(path)
-      }.flatMap { _ ⇒
-        if ((existingTag == etag.toString) || (etag.toString == "*" && existingRev != 0)) {
-          Task.raiseError(PreconditionFailed(ErrorBody("revision")))
-        } else {
-          Task.now(existingRev)
-        }
-      }
-      } getOrElse {
-        Task.now(r)
-      }
-    }
-  }
-
-  private def checkFailPreconditions(path: String): Task[Unit] = {
-    failPreconditions.get(path).map { fp ⇒
-      if (fp._2.incrementAndGet() <= fp._1) {
-        Task.raiseError(PreconditionFailed(ErrorBody("fake")))
-      }
-      else {
-        Task.unit
-      }
-    }.getOrElse {
-      Task.unit
-    }
-  }
+  private val hyperStorageMock = new HyperStorageMock(hyperbus, scheduler)
+  import hyperStorageMock._
 
   val time: Long = System.currentTimeMillis()
 
@@ -354,7 +256,6 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
   }
 
   override def beforeEach(): Unit = {
-    hyperStorageContent.clear()
-    failPreconditions.clear()
+    hyperStorageMock.reset()
   }
 }
