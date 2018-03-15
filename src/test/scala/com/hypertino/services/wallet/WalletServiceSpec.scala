@@ -1,6 +1,6 @@
 package com.hypertino.services.wallet
 
-import com.hypertino.binders.value.{Null, Obj, Text, Value}
+import com.hypertino.binders.value.{Lst, Null, Obj, Text, Value}
 import com.hypertino.hyperbus.Hyperbus
 import com.hypertino.hyperbus.model.{BadRequest, Conflict, Created, MessagingContext, Ok}
 import com.hypertino.hyperbus.subscribe.Subscribable
@@ -33,6 +33,7 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
   private val service = new WalletService()
   private val hyperStorageMock = new HyperStorageMock(hyperbus, scheduler)
   import hyperStorageMock._
+  hyperbus.startServices()
 
   val time: Long = System.currentTimeMillis()
 
@@ -51,13 +52,13 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "updated_at" → time
     ),1))
 
-    hyperStorageContent.get(s"wallet-service/wallets/w1/transactions~/t1") shouldBe Some((Obj.from(
+    hyperStorageContent.get(s"wallet-service/wallets/w1/transactions~") shouldBe Some((Obj.from("t1" -> Obj.from(
       "transaction_id" → "t1",
       "wallet_id" → "w1",
       "amount" → 10,
       "status" → "applied",
       "created_at" → time
-    ),2))
+    )),2))
 
     val t = hyperbus
       .ask(WalletTransactionGet("w1", "t1"))
@@ -91,13 +92,15 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "updated_at" → time
     ),2))
 
-    hyperStorageContent.get(s"wallet-service/wallets/w1/transactions~/t2") shouldBe Some((Obj.from(
+    val transactions = hyperStorageContent(s"wallet-service/wallets/w1/transactions~")
+    transactions._2 shouldBe 2
+    transactions._1.dynamic.t2 shouldBe Obj.from(
       "transaction_id" → "t2",
       "wallet_id" → "w1",
       "amount" → -3,
       "status" → "applied",
       "created_at" → time
-    ),2))
+    )
   }
 
   it should "complete last transaction" in {
@@ -108,21 +111,23 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
     u shouldBe a[Created[_]]
     u.body shouldBe a[Wallet]
 
-    hyperStorageContent.get(s"wallet-service/wallets/w1/transactions~/t1") shouldBe Some((Obj.from(
+    val transactions = hyperStorageContent(s"wallet-service/wallets/w1/transactions~")
+    transactions._2 shouldBe 2
+    transactions._1.dynamic.t1 shouldBe Obj.from(
       "transaction_id" → "t1",
       "wallet_id" → "w1",
       "amount" → 10,
       "status" → "applied",
       "created_at" → time
-    ),2))
+    )
 
-    hyperStorageContent.put(s"wallet-service/wallets/w1/transactions~/t1", (Obj.from(
+    hyperStorageContent.put("wallet-service/wallets/w1/transactions~", (Obj.from("t1" -> Obj.from(
       "transaction_id" → "t1",
       "wallet_id" → "w1",
       "amount" → 10,
       "status" → "new",
       "created_at" → time
-    ),1l))
+    )),1l))
 
     val u2 = hyperbus
       .ask(WalletTransactionPut("w1", "t2", WalletTransaction("t2", "w1", -3l, time, None, None, WalletTransactionStatus.NEW, Null)))
@@ -139,21 +144,23 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "updated_at" → time
     ),2))
 
-    hyperStorageContent.get(s"wallet-service/wallets/w1/transactions~/t1") shouldBe Some((Obj.from(
+    val transactions2 = hyperStorageContent(s"wallet-service/wallets/w1/transactions~")
+    transactions2._2 shouldBe 3
+    transactions2._1.dynamic.t1 shouldBe Obj.from(
       "transaction_id" → "t1",
       "wallet_id" → "w1",
       "amount" → 10,
       "status" → "applied",
       "created_at" → time
-    ),2))
+    )
 
-    hyperStorageContent.get(s"wallet-service/wallets/w1/transactions~/t2") shouldBe Some((Obj.from(
+    transactions2._1.dynamic.t2 shouldBe Obj.from(
       "transaction_id" → "t2",
       "wallet_id" → "w1",
       "amount" → -3,
       "status" → "applied",
       "created_at" → time
-    ),2))
+    )
   }
 
   it should "retry transaction if precondition failed" in {
@@ -181,13 +188,15 @@ class WalletServiceSpec extends FlatSpec with Module with BeforeAndAfterAll with
       "updated_at" → time
     ),2))
 
-    hyperStorageContent.get(s"wallet-service/wallets/w1/transactions~/t2") shouldBe Some((Obj.from(
+    val transactions2 = hyperStorageContent(s"wallet-service/wallets/w1/transactions~")
+    transactions2._2 shouldBe 2
+    transactions2._1.dynamic.t2 shouldBe Obj.from(
       "transaction_id" → "t2",
       "wallet_id" → "w1",
       "amount" → -3,
       "status" → "applied",
       "created_at" → time
-    ),2))
+    )
 
     failPreconditions("wallet-service/wallets/w1")._2.get shouldBe 3
   }
