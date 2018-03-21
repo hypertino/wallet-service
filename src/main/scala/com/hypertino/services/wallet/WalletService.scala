@@ -161,7 +161,7 @@ class WalletService(implicit val injector: Injector) extends Service with Inject
 
   private def checkBounds(wallet: Wallet)(implicit mc: MessagingContext): Task[Wallet] = {
     if (wallet.minimum.exists(wallet.amount < _))
-      Task.raiseError(Conflict(ErrorBody(ErrorCode.WALLET_MINIMUM_EXCEEDED, Some(s"${wallet.amount} is less than allowed ${wallet.minimum.get}"))))
+      Task.raiseError(Conflict(ErrorBody(ErrorCode.WALLET_FALL_BELOW_MINIMUM, Some(s"${wallet.amount} is less than allowed ${wallet.minimum.get}"))))
     else
     if (wallet.maximum.exists(wallet.amount > _))
       Task.raiseError(Conflict(ErrorBody(ErrorCode.WALLET_MAXIMUM_EXCEEDED, Some(s"${wallet.amount} is greater than allowed ${wallet.maximum.get}"))))
